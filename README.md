@@ -66,10 +66,25 @@ streamlit run app.py
 ├── requirements.txt        # 의존성 목록
 ├── 실행하기.bat            # Windows 원클릭 실행 스크립트
 ├── 설명서.txt              # 사용자용 간단 안내
-└── README.md               # 현재 문서
+├── docker-compose.yml      # Grafana 모니터링 컨테이너 구성
+├── README.md               # 현재 문서
+│
+├── docs/                   # 기획·보고서 문서
+│   ├── Biz-Forecaster_중간보고서_v2.md      # 중간보고서 (최신, 빵집 도메인 반영)
+│   ├── Biz-Forecaster_Interim_Report.docx
+│   ├── Biz-Forecaster_Architecture.pptx
+│   └── [BIZ] 2026 한이음 드림업 개발보고서.docx
+│
+├── data/                   # 이벤트 통합 데이터셋 (H1·H2′·이상탐지·SHAP·What-if 탭 검증용)
+│   ├── integrated_dataset.csv   # 합성 POS+이벤트 데이터 (2024~2025, 실거래 정보 아님)
+│   └── eda.ipynb                 # 데이터셋 탐색 노트북
+│
+└── grafana/                # Grafana 프로비저닝 설정 (데이터소스·대시보드)
+    ├── dashboards/
+    └── provisioning/
 ```
 
-> ℹ️ 실제 판매내역 CSV는 개인정보·영업정보 보호를 위해 저장소에서 제외되어 있습니다 (`.gitignore`). 앱 실행 시 사용자가 직접 업로드합니다.
+> ℹ️ 실제 판매내역 CSV(사용자가 사이드바로 업로드하는 원본)는 개인정보·영업정보 보호를 위해 저장소에서 제외됩니다 (`.gitignore`의 `*.csv`). 단 `data/integrated_dataset.csv`는 실거래 정보가 아닌 합성 데이터라 예외로 추적됩니다.
 
 ## 🗃️ 입력 데이터 형식
 
@@ -100,10 +115,10 @@ streamlit run app.py
 - [x] **설명가능성(XAI)** : SHAP TreeExplainer로 예측을 "기저치 + 이벤트별 기여도"로 분해, 자연어 브리핑 생성 (🧮 탭)
 - [x] **LangGraph 에이전트** : 조회→예측→해석→브리핑 4단계 워크플로우 (품목별 상세 분석 탭 하단)
 - [x] **Grafana 모니터링** : 이상탐지 결과를 SQLite로 내보내 Grafana 대시보드로 시각화 (아래 "모니터링 대시보드 실행" 참고)
-- [ ] What-if 시뮬레이션 (대화형 채팅 인터페이스)
+- [x] **What-if 채팅** : 이벤트 조건을 체크·채팅으로 입력하면 H1 모델로 실계산한 예상 판매량·권장 생산량 응답 (💬 탭, 키워드 매칭 기반이며 LLM 미연동)
 - [ ] N노드(체인점·가맹점) 확장 — 본 PoC 로드맵 범위 밖, 향후 계획
 
-> 📄 상세 기획·검증 내용은 별도의 개발보고서(중간보고서)를 참고하세요.
+> 📄 상세 기획·검증 내용은 [`docs/`](./docs) 폴더의 중간보고서를 참고하세요.
 
 ---
 
