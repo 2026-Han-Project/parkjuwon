@@ -5,6 +5,8 @@ __pycache__/
 
 # 실제 거래 데이터 (개인정보/영업정보 보호 — 저장소에 올리지 않음)
 *.csv
+# 단, data/의 합성(synthetic) 통합 데이터셋은 실거래 정보가 아니므로 예외로 추적
+!/data/integrated_dataset.csv
 
 # 프로그램이 생성한 엑셀 예측 결과물
 *.xlsx
