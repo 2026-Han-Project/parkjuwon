@@ -8,3 +8,6 @@ __pycache__/
 
 # 프로그램이 생성한 엑셀 예측 결과물
 *.xlsx
+
+# 이상탐지 결과를 Grafana용으로 내보낸 모니터링 DB (실행 시 생성됨)
+monitoring.db

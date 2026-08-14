@@ -6,3 +6,6 @@ statsmodels
 openpyxl
 scikit-learn
 xgboost
+prophet
+langgraph
+shap

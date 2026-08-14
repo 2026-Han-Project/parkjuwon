@@ -1,0 +1,16 @@
+services:
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: biz-forecaster-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_INSTALL_PLUGINS=frser-sqlite-datasource
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=frser-sqlite-datasource
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./monitoring.db:/var/lib/grafana/data/monitoring.db:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards

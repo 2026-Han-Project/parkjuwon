@@ -1,0 +1,160 @@
+{
+  "uid": "biz-forecaster-monitoring",
+  "title": "Biz-Forecaster 이상탐지 모니터링",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "2023-12-25T00:00:00.000Z", "to": "2026-01-05T00:00:00.000Z" },
+  "refresh": "",
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "탐지된 이상일 수 (전체)",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+          "queryText": "SELECT COUNT(*) AS value FROM daily_metrics WHERE is_anomaly = 1",
+          "rawQueryText": "SELECT COUNT(*) AS value FROM daily_metrics WHERE is_anomaly = 1",
+          "queryType": "table",
+          "timeColumns": []
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "전체 매출 동반 이상",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+          "queryText": "SELECT COUNT(*) AS value FROM daily_metrics WHERE is_anomaly = 1 AND scope = '전체 매출 동반 이상'",
+          "rawQueryText": "SELECT COUNT(*) AS value FROM daily_metrics WHERE is_anomaly = 1 AND scope = '전체 매출 동반 이상'",
+          "queryType": "table",
+          "timeColumns": []
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "품목 단독 이상",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+          "queryText": "SELECT COUNT(*) AS value FROM daily_metrics WHERE is_anomaly = 1 AND scope = '품목 단독 이상'",
+          "rawQueryText": "SELECT COUNT(*) AS value FROM daily_metrics WHERE is_anomaly = 1 AND scope = '품목 단독 이상'",
+          "queryType": "table",
+          "timeColumns": []
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "모니터링 대상 품목 수",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+          "queryText": "SELECT COUNT(DISTINCT target) AS value FROM daily_metrics",
+          "rawQueryText": "SELECT COUNT(DISTINCT target) AS value FROM daily_metrics",
+          "queryType": "table",
+          "timeColumns": []
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "전체 매출 추이 및 3σ 관리한계",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+          "queryText": "SELECT strftime('%s', date) * 1000 AS time, value, ucl, lcl FROM daily_metrics WHERE target = '(전체 매출)' ORDER BY date",
+          "rawQueryText": "SELECT strftime('%s', date) * 1000 AS time, value, ucl, lcl FROM daily_metrics WHERE target = '(전체 매출)' ORDER BY date",
+          "queryType": "table",
+          "timeColumns": ["time"]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              { "targetField": "time", "destinationType": "time" }
+            ],
+            "fields": {}
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "pointSize": 4 } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "ucl" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "lcl" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "dash": [10, 10], "fill": "dash" } },
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "품목별 이상탐지 건수",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+          "queryText": "SELECT target AS 대상, SUM(is_anomaly) AS 이상일수, COUNT(*) AS 전체일수 FROM daily_metrics GROUP BY target ORDER BY 이상일수 DESC",
+          "rawQueryText": "SELECT target AS 대상, SUM(is_anomaly) AS 이상일수, COUNT(*) AS 전체일수 FROM daily_metrics GROUP BY target ORDER BY 이상일수 DESC",
+          "queryType": "table",
+          "timeColumns": []
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "최근 이상치 상세 목록",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "bizforecaster-sqlite" },
+          "queryText": "SELECT date AS 날짜, target AS 대상, value AS 값, detection_count AS 탐지방법수, scope AS 구분 FROM daily_metrics WHERE is_anomaly = 1 ORDER BY date DESC LIMIT 50",
+          "rawQueryText": "SELECT date AS 날짜, target AS 대상, value AS 값, detection_count AS 탐지방법수, scope AS 구분 FROM daily_metrics WHERE is_anomaly = 1 ORDER BY date DESC LIMIT 50",
+          "queryType": "table",
+          "timeColumns": []
+        }
+      ]
+    }
+  ]
+}
