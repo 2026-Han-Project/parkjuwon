@@ -38,6 +38,18 @@ try:
 except ImportError:
     TF_AVAILABLE = False
 
+# --- Prophet 라이브러리 (Layer 1 기저모델, 설치 여부 확인) ---
+try:
+    import logging as _logging
+    from prophet import Prophet
+
+    _logging.getLogger('cmdstanpy').setLevel(_logging.WARNING)
+    _logging.getLogger('prophet').setLevel(_logging.WARNING)
+
+    PROPHET_AVAILABLE = True
+except ImportError:
+    PROPHET_AVAILABLE = False
+
 # --- LangGraph 에이전트 라이브러리 (설치 여부 확인) ---
 try:
     from langgraph.graph import StateGraph, END
@@ -220,6 +232,30 @@ def predict_xgboost(series, weeks=5):
     model = xgb.XGBRegressor(n_estimators=100, objective='reg:squarederror', random_state=42)
     model.fit(X, y)
     return predict_ml_recursive(model, series[-win:], weeks)
+
+
+def predict_prophet(dated_series, periods, freq='D'):
+    """Layer 1 기저모델(Prophet). dated_series는 DatetimeIndex를 가진 pd.Series여야
+    실제 달력(연간·주간 계절성)을 학습할 수 있다. 실패·미설치·데이터 부족 시
+    predict_linear_trend_force로 폴백한다."""
+    values = np.asarray(dated_series.values if hasattr(dated_series, 'values') else dated_series, dtype=float)
+    if not PROPHET_AVAILABLE or len(values) < 10 or not hasattr(dated_series, 'index'):
+        return predict_linear_trend_force(values, periods)
+    try:
+        train_df = pd.DataFrame({'ds': dated_series.index, 'y': values})
+        span_periods = len(train_df)
+        is_weekly = freq.startswith('W')
+        model = Prophet(
+            weekly_seasonality=(not is_weekly),
+            yearly_seasonality=(span_periods >= (104 if is_weekly else 365)),
+            daily_seasonality=False,
+        )
+        model.fit(train_df)
+        future = model.make_future_dataframe(periods=periods, freq=freq, include_history=False)
+        forecast = model.predict(future)
+        return forecast['yhat'].to_numpy()[:periods]
+    except Exception:
+        return predict_linear_trend_force(values, periods)
 
 
 def predict_lstm(series, weeks=5):
@@ -772,12 +808,14 @@ if uploaded_file is not None:
                     p_linear = predict_linear_trend_force(series_data, 5)
                     p_holt = predict_holt_trend(series_data, 5)
                     p_arima = predict_arima_trend(series_data, 5)
+                    p_prophet = predict_prophet(item_weekly, 5, freq='W-MON') if PROPHET_AVAILABLE else [0] * 5
 
                     p_rf = predict_rf(series_data, 5) if ML_AVAILABLE else [0] * 5
                     p_xgb = predict_xgboost(series_data, 5) if ML_AVAILABLE else [0] * 5
                     p_lstm = predict_lstm(series_data, 5) if TF_AVAILABLE else [0] * 5
 
                     valid_preds = [p_linear, p_holt, p_arima]
+                    if PROPHET_AVAILABLE: valid_preds.append(p_prophet)
                     if ML_AVAILABLE: valid_preds.extend([p_rf, p_xgb])
                     if TF_AVAILABLE: valid_preds.append(p_lstm)
 
@@ -790,7 +828,8 @@ if uploaded_file is not None:
                     '날짜': dates_str,
                     '앙상블(최종)': ens_pred,
                     '선형추세': [round(max(0, x), 1) for x in p_linear],
-                    'Holt': [round(max(0, x), 1) for x in p_holt]
+                    'Holt': [round(max(0, x), 1) for x in p_holt],
+                    'Prophet': [round(max(0, x), 1) for x in p_prophet],
                 })
 
                 st.subheader("📋 예측 결과표")
@@ -937,7 +976,7 @@ if uploaded_file is not None:
                         events = build_event_dummies(item_daily)
                         beta = fit_event_elasticity(train['sales_qty'], events.loc[train.index])
 
-                        base_fc = predict_holt_trend(train['sales_qty'].values, horizon)
+                        base_fc = predict_prophet(train['sales_qty'], horizon, freq='D')
                         base_fc = np.clip(base_fc, 0, None)
 
                         gated_fc, event_score, gate_on = apply_event_gating(
@@ -1077,7 +1116,7 @@ if uploaded_file is not None:
                             train_leading_lagged = leading_lagged_v.iloc[:-horizon2]
                             test_leading_lagged = leading_lagged_v.iloc[-horizon2:]
 
-                            base_fc2 = predict_holt_trend(train_lagging.values, horizon2)
+                            base_fc2 = predict_prophet(train_lagging, horizon2, freq='D')
                             base_fc2 = np.clip(base_fc2, 0, None)
 
                             reg = fit_item_chain_gain(train_lagging, train_leading_lagged)
