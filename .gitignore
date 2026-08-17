@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .streamlit/
 
+# TFT(pytorch_lightning) 학습 시 자동 생성되는 로그 디렉토리
+lightning_logs/
+
 # 실제 거래 데이터 (개인정보/영업정보 보호 — 저장소에 올리지 않음)
 *.csv
 # 단, data/의 합성(synthetic) 통합 데이터셋은 실거래 정보가 아니므로 예외로 추적

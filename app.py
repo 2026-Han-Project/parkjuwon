@@ -50,6 +50,21 @@ try:
 except ImportError:
     PROPHET_AVAILABLE = False
 
+# --- TFT(Temporal Fusion Transformer) 라이브러리 (Layer 1 고도화, 논문용 성능 비교, 설치 여부 확인) ---
+try:
+    import torch
+    import lightning.pytorch as pl
+    from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
+    from pytorch_forecasting.data import GroupNormalizer
+    from pytorch_forecasting.metrics import QuantileLoss
+
+    _logging.getLogger('pytorch_lightning').setLevel(_logging.WARNING)
+    _logging.getLogger('lightning').setLevel(_logging.WARNING)
+
+    TFT_AVAILABLE = True
+except ImportError:
+    TFT_AVAILABLE = False
+
 # --- LangGraph 에이전트 라이브러리 (설치 여부 확인) ---
 try:
     from langgraph.graph import StateGraph, END
@@ -256,6 +271,76 @@ def predict_prophet(dated_series, periods, freq='D'):
         return forecast['yhat'].to_numpy()[:periods]
     except Exception:
         return predict_linear_trend_force(values, periods)
+
+
+def predict_tft(dated_series, periods, freq='D'):
+    """Layer 1 고도화 모델(TFT, Temporal Fusion Transformer) — 논문용 Prophet 대비
+    성능 비교 목적. 단일 품목 시계열에 대해 짧게 학습(few-epoch)한다. 데이터가
+    부족(encoder+prediction 구간 확보 불가)하거나 미설치·학습 실패 시
+    predict_prophet으로 폴백한다."""
+    values = np.asarray(dated_series.values if hasattr(dated_series, 'values') else dated_series, dtype=float)
+    n = len(values)
+    encoder_len = min(30, max(10, n - periods - 5))
+    if not TFT_AVAILABLE or n < encoder_len + periods + 5:
+        return predict_prophet(dated_series, periods, freq=freq)
+    try:
+        torch.manual_seed(42)
+        df = pd.DataFrame({
+            'time_idx': np.arange(n),
+            'group': 'series',
+            'value': values,
+        })
+        training_cutoff = df['time_idx'].max() - periods
+
+        training = TimeSeriesDataSet(
+            df[df.time_idx <= training_cutoff],
+            time_idx='time_idx',
+            target='value',
+            group_ids=['group'],
+            min_encoder_length=max(1, encoder_len // 2),
+            max_encoder_length=encoder_len,
+            min_prediction_length=1,
+            max_prediction_length=periods,
+            time_varying_unknown_reals=['value'],
+            target_normalizer=GroupNormalizer(groups=['group']),
+            add_relative_time_idx=True,
+            add_target_scales=True,
+            add_encoder_length=True,
+        )
+        validation = TimeSeriesDataSet.from_dataset(training, df, predict=True, stop_randomization=True)
+
+        train_dataloader = training.to_dataloader(train=True, batch_size=16, num_workers=0)
+        val_dataloader = validation.to_dataloader(train=False, batch_size=16, num_workers=0)
+
+        tft = TemporalFusionTransformer.from_dataset(
+            training,
+            learning_rate=0.03,
+            hidden_size=8,
+            attention_head_size=1,
+            dropout=0.1,
+            hidden_continuous_size=8,
+            loss=QuantileLoss(),
+            optimizer='adam',
+            log_interval=-1,
+        )
+
+        trainer = pl.Trainer(
+            max_epochs=8,
+            accelerator='cpu',
+            enable_progress_bar=False,
+            enable_model_summary=False,
+            logger=False,
+            enable_checkpointing=False,
+        )
+        trainer.fit(tft, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+
+        raw_predictions = tft.predict(val_dataloader, mode='prediction')
+        forecast = np.asarray(raw_predictions[0]).flatten()[:periods]
+        if len(forecast) < periods:
+            return predict_prophet(dated_series, periods, freq=freq)
+        return forecast
+    except Exception:
+        return predict_prophet(dated_series, periods, freq=freq)
 
 
 def predict_lstm(series, weeks=5):
@@ -809,6 +894,7 @@ if uploaded_file is not None:
                     p_holt = predict_holt_trend(series_data, 5)
                     p_arima = predict_arima_trend(series_data, 5)
                     p_prophet = predict_prophet(item_weekly, 5, freq='W-MON') if PROPHET_AVAILABLE else [0] * 5
+                    p_tft = predict_tft(item_weekly, 5, freq='W-MON') if TFT_AVAILABLE else [0] * 5
 
                     p_rf = predict_rf(series_data, 5) if ML_AVAILABLE else [0] * 5
                     p_xgb = predict_xgboost(series_data, 5) if ML_AVAILABLE else [0] * 5
@@ -816,6 +902,7 @@ if uploaded_file is not None:
 
                     valid_preds = [p_linear, p_holt, p_arima]
                     if PROPHET_AVAILABLE: valid_preds.append(p_prophet)
+                    if TFT_AVAILABLE: valid_preds.append(p_tft)
                     if ML_AVAILABLE: valid_preds.extend([p_rf, p_xgb])
                     if TF_AVAILABLE: valid_preds.append(p_lstm)
 
@@ -830,6 +917,7 @@ if uploaded_file is not None:
                     '선형추세': [round(max(0, x), 1) for x in p_linear],
                     'Holt': [round(max(0, x), 1) for x in p_holt],
                     'Prophet': [round(max(0, x), 1) for x in p_prophet],
+                    'TFT': [round(max(0, x), 1) for x in p_tft],
                 })
 
                 st.subheader("📋 예측 결과표")

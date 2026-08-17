@@ -7,5 +7,6 @@ openpyxl
 scikit-learn
 xgboost
 prophet
+pytorch_forecasting
 langgraph
 shap
