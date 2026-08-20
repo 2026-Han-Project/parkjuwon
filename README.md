@@ -108,7 +108,8 @@ streamlit run app.py
 
 본 저장소는 전체 기획의 **1차 PoC**입니다. 이벤트 통합 데이터셋(`integrated_dataset.csv`, `date/item/category/sales_qty/is_weekend/is_holiday/is_vacation/season_period/precip_type/temperature` 컬럼 포함)을 업로드하면 아래 기능들을 각각의 탭에서 백테스트로 검증할 수 있습니다.
 
-- [x] **Layer 1 — 시계열 앙상블 기저 수요 예측** (📊 품목별 상세 분석 탭)
+- [x] **Layer 1 — 시계열 앙상블 기저 수요 예측** (📊 품목별 상세 분석 탭) : 선형추세·Holt·ARIMA·Prophet·TFT·RandomForest·XGBoost 7종 단순평균
+- [x] **Layer 1 고도화 — TFT(Temporal Fusion Transformer)** : 품목별 단일 시계열로 학습해 Prophet과 성능 비교(논문용). 일별 H=14는 Prophet 우세, 주간 H=5는 TFT 우세로 해상도에 따라 갈림 (📊 탭 결과표의 TFT 컬럼)
 - [x] **Layer 2 — 이벤트 우선(Event-first) 예측 (H1)** : 공휴일·날씨·방학·시즌·경쟁점포 이벤트를 외생변수로 반영, 임계치 게이팅으로 Walk-forward 백테스트 검증 (🌦 탭)
 - [x] **Layer 3 — 품목간 수요연쇄 연계 (H2′)** : 카테고리 간 교차상관·Granger 인과검정으로 최적 시차 탐색 및 백테스트 검증 (🔗 탭)
 - [x] **이상탐지** : Isolation Forest + 3σ + EWMA 3중 탐지, 전체 매출 동반 vs 품목 단독 이상 구분 (🚨 탭)
@@ -143,4 +144,4 @@ docker compose -p biz-forecaster down
 
 ## 🛠️ 기술 스택
 
-`Python` · `Streamlit` · `pandas` · `numpy` · `plotly` · `statsmodels` · `scikit-learn` · `xgboost` · `prophet` · `langgraph` · `shap` · `openpyxl` · `Grafana`(Docker)
+`Python` · `Streamlit` · `pandas` · `numpy` · `plotly` · `statsmodels` · `scikit-learn` · `xgboost` · `prophet` · `pytorch-forecasting`(TFT) · `torch` · `lightning` · `langgraph` · `shap` · `openpyxl` · `Grafana`(Docker)
