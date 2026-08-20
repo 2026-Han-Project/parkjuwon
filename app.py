@@ -275,8 +275,9 @@ def predict_prophet(dated_series, periods, freq='D'):
 
 def predict_tft(dated_series, periods, freq='D'):
     """Layer 1 고도화 모델(TFT, Temporal Fusion Transformer) — 논문용 Prophet 대비
-    성능 비교 목적. 단일 품목 시계열에 대해 짧게 학습(few-epoch)한다. 데이터가
-    부족(encoder+prediction 구간 확보 불가)하거나 미설치·학습 실패 시
+    성능 비교 목적. 단일 품목 시계열에 대해 짧게 학습(few-epoch)한 뒤,
+    **관측 구간 이후의 미래 periods 구간**을 예측한다. 데이터가 부족
+    (encoder+prediction 구간 확보 불가)하거나 미설치·학습 실패 시
     predict_prophet으로 폴백한다."""
     values = np.asarray(dated_series.values if hasattr(dated_series, 'values') else dated_series, dtype=float)
     n = len(values)
@@ -290,10 +291,11 @@ def predict_tft(dated_series, periods, freq='D'):
             'group': 'series',
             'value': values,
         })
-        training_cutoff = df['time_idx'].max() - periods
 
+        # 학습은 관측된 전체 이력(0 ~ n-1)을 사용한다. 예측 대상이 '미래'이므로
+        # 가장 최근 구간을 학습에서 떼어놓을 이유가 없다.
         training = TimeSeriesDataSet(
-            df[df.time_idx <= training_cutoff],
+            df,
             time_idx='time_idx',
             target='value',
             group_ids=['group'],
@@ -307,10 +309,7 @@ def predict_tft(dated_series, periods, freq='D'):
             add_target_scales=True,
             add_encoder_length=True,
         )
-        validation = TimeSeriesDataSet.from_dataset(training, df, predict=True, stop_randomization=True)
-
         train_dataloader = training.to_dataloader(train=True, batch_size=16, num_workers=0)
-        val_dataloader = validation.to_dataloader(train=False, batch_size=16, num_workers=0)
 
         tft = TemporalFusionTransformer.from_dataset(
             training,
@@ -332,9 +331,28 @@ def predict_tft(dated_series, periods, freq='D'):
             logger=False,
             enable_checkpointing=False,
         )
-        trainer.fit(tft, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+        trainer.fit(tft, train_dataloaders=train_dataloader)
 
-        raw_predictions = tft.predict(val_dataloader, mode='prediction')
+        # --- 미래 구간 예측 ---
+        # TimeSeriesDataSet(predict=True)는 '넘겨준 데이터프레임의 마지막 예측창'을 고른다.
+        # 관측 데이터만 넘기면 디코더가 과거 마지막 periods 구간을 가리키므로(=예측이 아니라 재현),
+        # 인코더(관측 마지막 encoder_len) + 디코더(아직 관측되지 않은 미래 periods) 프레임을
+        # 직접 만들어 넘긴다. 미래 행의 'value'는 타깃이라 모델 입력으로 쓰이지 않으며,
+        # 데이터셋 구성을 위한 자리표시자로 마지막 관측값을 복사해 둔다.
+        last_idx = int(df['time_idx'].iloc[-1])
+        encoder_df = df[df['time_idx'] > last_idx - encoder_len]
+        future_df = pd.concat(
+            [df.iloc[[-1]].assign(time_idx=last_idx + i) for i in range(1, periods + 1)],
+            ignore_index=True,
+        )
+        predict_df = pd.concat([encoder_df, future_df], ignore_index=True)
+
+        predict_ds = TimeSeriesDataSet.from_dataset(
+            training, predict_df, predict=True, stop_randomization=True
+        )
+        predict_dl = predict_ds.to_dataloader(train=False, batch_size=1, num_workers=0)
+
+        raw_predictions = tft.predict(predict_dl, mode='prediction')
         forecast = np.asarray(raw_predictions[0]).flatten()[:periods]
         if len(forecast) < periods:
             return predict_prophet(dated_series, periods, freq=freq)
