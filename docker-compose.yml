@@ -10,7 +10,14 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
+      # 알림 수신처. 기본값은 로컬 웹훅 수신기(grafana/alert_receiver.py)이며
+      # 외부 서비스도 비용도 필요 없다. Slack 등으로 보내려면 .env에
+      # GRAFANA_ALERT_WEBHOOK_URL=... 을 두면 이 기본값을 덮어쓴다.
+      - GRAFANA_ALERT_WEBHOOK_URL=${GRAFANA_ALERT_WEBHOOK_URL:-http://host.docker.internal:9099/alert}
     volumes:
       - ./monitoring.db:/var/lib/grafana/data/monitoring.db:ro
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./grafana/dashboards:/var/lib/grafana/dashboards
+    extra_hosts:
+      # Linux 호스트에서도 컨테이너가 host.docker.internal로 호스트에 닿게 한다
+      - "host.docker.internal:host-gateway"

@@ -1,0 +1,26 @@
+# 알림 수신처(Contact point) 프로비저닝
+#
+# 기본값은 **로컬 웹훅**이다. 외부 서비스 계정도, 유료 연동도 필요 없고
+# 저장소에 비밀정보가 들어가지 않는다. 수신 확인은 함께 제공하는
+# `grafana/alert_receiver.py`를 실행하면 콘솔과 파일로 볼 수 있다.
+#
+# URL은 환경변수로 덮어쓸 수 있다.
+#   .env 에  GRAFANA_ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
+# 처럼 두면 Slack 등 외부 수신처로 보낼 수 있다. `.env`는 .gitignore로
+# 차단되어 있으므로 웹훅 URL(비밀값)이 저장소에 올라가지 않는다.
+#
+# 수신처를 바꾸고 싶다면 아래 type을 slack / email 등으로 바꾸면 된다.
+# 다만 email은 별도 SMTP 서버 설정이, slack은 워크스페이스 웹훅이 필요하다.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: biz-forecaster-webhook
+    receivers:
+      - uid: bf-receiver-webhook
+        type: webhook
+        settings:
+          # host.docker.internal = 컨테이너에서 호스트(내 PC)를 가리키는 이름
+          url: $__env{GRAFANA_ALERT_WEBHOOK_URL}
+          httpMethod: POST
+        disableResolveMessage: false

@@ -75,7 +75,9 @@ streamlit run app.py
 │   │                           #        data/processed/integrated_dataset.csv 를 그대로 복사
 │   └── eda.ipynb                 # 데이터셋 탐색 노트북
 │
-└── grafana/                # Grafana 프로비저닝 설정 (데이터소스·대시보드)
+└── grafana/                # Grafana 프로비저닝 (데이터소스·대시보드·알림)
+    ├── provisioning/alerting/   # 알림 규칙·수신처·라우팅 정책
+    └── alert_receiver.py        # 알림 수신 확인용 로컬 웹훅 서버 (표준 라이브러리만 사용)
     ├── dashboards/
     └── provisioning/
 ```
@@ -111,7 +113,7 @@ streamlit run app.py
 - [x] **이상탐지** : Isolation Forest + 3σ + EWMA 3중 탐지, 전체 매출 동반 vs 품목 단독 이상 구분 (🚨 탭)
 - [x] **설명가능성(XAI)** : SHAP TreeExplainer로 예측을 "기저치 + 이벤트별 기여도"로 분해, 자연어 브리핑 생성 (🧮 탭)
 - [x] **LangGraph 에이전트** : 조회→예측→해석→브리핑 4단계 워크플로우 (품목별 상세 분석 탭 하단)
-- [x] **Grafana 모니터링** : 이상탐지 결과를 SQLite로 내보내 Grafana 대시보드로 시각화 (아래 "모니터링 대시보드 실행" 참고)
+- [x] **Grafana 모니터링·알림** : 이상탐지 결과를 SQLite로 내보내 대시보드로 시각화하고, 다중 탐지·전체매출 동반 이상이 감지되면 웹훅으로 알림 발송 (아래 "모니터링 대시보드 실행" 참고)
 - [x] **What-if 채팅** : 이벤트 조건을 체크·채팅으로 입력하면 H1 모델로 실계산한 예상 판매량·권장 생산량 응답 (💬 탭, 키워드 매칭 기반이며 LLM 미연동)
 - [ ] N노드(체인점·가맹점) 확장 — 본 PoC 로드맵 범위 밖, 향후 계획
 
@@ -133,6 +135,33 @@ docker compose -p biz-forecaster up -d
 ```bash
 docker compose -p biz-forecaster down
 ```
+
+### 알림 (Alerting)
+
+Grafana가 뜰 때 알림 규칙 2건이 함께 프로비저닝됩니다. 내보낸 데이터의 마지막 날짜 기준
+**최근 30일** 구간을 1분마다 평가합니다.
+
+| 규칙 | 발동 조건 | 심각도 |
+|---|---|---|
+| 다중 탐지 이상 발생 | 3σ·EWMA·Isolation Forest 중 **2개 이상이 동시에** 이상 판정한 날이 있을 때 | warning |
+| 전체 매출 동반 이상 발생 | 품목이 아니라 **매장 전체 매출**이 함께 흔들린 이상이 있을 때 | critical |
+
+기본 수신처는 **로컬 웹훅**이라 외부 서비스 계정도 비용도 필요 없습니다. 알림이 실제로
+도착하는지 보려면 Grafana를 띄우기 전에 수신 서버를 실행해 두십시오.
+
+```bash
+python grafana/alert_receiver.py        # 기본 포트 9099
+```
+
+받은 알림은 콘솔에 요약되고 `grafana/alerts_received.log`에 원문이 쌓입니다.
+Slack 등 외부로 보내려면 `.env`에 다음을 두면 기본 웹훅 URL을 덮어씁니다.
+
+```
+GRAFANA_ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
+> `.env`는 `.gitignore`로 차단되어 있으므로 웹훅 URL 같은 비밀값이 저장소에 올라가지 않습니다.
+
 
 > `grafana/provisioning/`에 데이터소스(SQLite 플러그인: `frser-sqlite-datasource`)와 대시보드가 코드로 정의되어 있어, 컨테이너를 새로 띄워도 수동 설정 없이 그대로 재현됩니다.
 

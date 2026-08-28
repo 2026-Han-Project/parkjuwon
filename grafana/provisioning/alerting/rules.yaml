@@ -1,0 +1,131 @@
+# Grafana 통합 알림(Unified Alerting) 규칙 프로비저닝
+# 이상탐지 탭에서 내보낸 monitoring.db(daily_metrics)를 주기적으로 조회해,
+# 내보낸 데이터의 **마지막 날짜 기준 최근 30일** 구간에 이상치가 있으면 알림을 발생시킨다.
+# (마지막 하루만 보면 이상치가 드물어 사실상 발동하지 않으므로 창을 30일로 잡았다.)
+#
+# 주의: frser-sqlite-datasource는 model에 queryText 외에 rawQueryText와
+# timeColumns가 함께 있어야 한다. 없으면 플러그인이 조용히 자기 기본 예시
+# 쿼리로 대체해 엉뚱한 결과를 낸다(대시보드 패널에서 겪은 것과 같은 함정).
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: biz-forecaster-anomaly
+    folder: Biz-Forecaster
+    interval: 1m
+    rules:
+      # ── 규칙 1: 두 가지 이상 방법이 동시에 잡은 이상 (신뢰도 높음) ──
+      - uid: bf-alert-multi-detect
+        title: 다중 탐지 이상 발생
+        condition: C
+        for: 0s
+        annotations:
+          summary: 최근 내보내기 시점에 2개 이상의 탐지 방법이 동시에 이상으로 판정한 날이 있습니다.
+          description: >-
+            3σ·EWMA·Isolation Forest 중 2개 이상이 동시에 이상으로 판정한 건수가 {{ $values.B }}건입니다.
+            Biz-Forecaster 이상탐지 탭에서 해당 날짜의 상세를 확인하세요.
+        labels:
+          severity: warning
+          service: biz-forecaster
+        isPaused: false
+        execErrState: OK
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: bizforecaster-sqlite
+            model:
+              refId: A
+              datasource:
+                type: frser-sqlite-datasource
+                uid: bizforecaster-sqlite
+              queryType: table
+              timeColumns: []
+              queryText: &q_multi >-
+                SELECT COUNT(*) AS value FROM daily_metrics
+                WHERE is_anomaly = 1 AND detection_count >= 2
+                  AND date >= date((SELECT MAX(date) FROM daily_metrics), '-30 day')
+              rawQueryText: *q_multi
+          - refId: B
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+
+      # ── 규칙 2: 전체 매출이 함께 흔들린 이상 (매장 전체 요인) ──
+      - uid: bf-alert-storewide
+        title: 전체 매출 동반 이상 발생
+        condition: C
+        for: 0s
+        annotations:
+          summary: 특정 품목이 아니라 매장 전체 매출이 함께 흔들린 이상이 감지되었습니다.
+          description: >-
+            전체 매출 동반 이상으로 분류된 건수가 {{ $values.B }}건입니다.
+            휴점·행사·날씨 등 매장 전체에 작용한 요인을 우선 확인하세요.
+        labels:
+          severity: critical
+          service: biz-forecaster
+        isPaused: false
+        execErrState: OK
+        noDataState: OK
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: bizforecaster-sqlite
+            model:
+              refId: A
+              datasource:
+                type: frser-sqlite-datasource
+                uid: bizforecaster-sqlite
+              queryType: table
+              timeColumns: []
+              queryText: &q_store >-
+                SELECT COUNT(*) AS value FROM daily_metrics
+                WHERE is_anomaly = 1 AND scope = '전체 매출 동반 이상'
+                  AND date >= date((SELECT MAX(date) FROM daily_metrics), '-30 day')
+              rawQueryText: *q_store
+          - refId: B
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
