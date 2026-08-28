@@ -71,7 +71,8 @@ streamlit run app.py
 │
 ├── data/                   # 이벤트 통합 데이터셋 (H1·H2′·이상탐지·SHAP·What-if 탭 검증용)
 │   ├── integrated_dataset.csv   # 합성 POS+이벤트 데이터 (2024~2025, 실거래 정보 아님)
-│   │                           #  출처: 2026-Han-Project/dataset (A파트 파이프라인 산출물)
+│   │                           #  출처: 2026-Han-Project/dataset @ e3bc984 (2026-08-28)
+│   │                           #        data/processed/integrated_dataset.csv 를 그대로 복사
 │   └── eda.ipynb                 # 데이터셋 탐색 노트북
 │
 └── grafana/                # Grafana 프로비저닝 설정 (데이터소스·대시보드)

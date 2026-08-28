@@ -274,6 +274,44 @@ def predict_prophet(dated_series, periods, freq='D'):
 
 
 
+def predict_prophet_with_regressors(train_series, train_X, test_X, freq='D'):
+    """Prophet 기저모델에 외생 회귀변수(train_X/test_X의 모든 컬럼)를 직접 투입한다.
+
+    사후 보정(곱셈형 게이팅·가산형 잔차)과 달리 추세·계절성·외생효과가 한 번의
+    적합에서 함께 분리 추정되므로, 기저모델이 이미 학습한 효과를 두 번 세지 않는다.
+    H1(이벤트 더미)과 H2′(선행 카테고리 시차 신호)가 이 함수를 공유한다.
+
+    미설치·데이터 부족·학습 실패 시 predict_prophet(외생변수 미반영)으로 폴백한다.
+    """
+    periods = len(test_X)
+    values = np.asarray(train_series.values if hasattr(train_series, 'values') else train_series,
+                        dtype=float)
+    if not PROPHET_AVAILABLE or len(values) < 10 or not hasattr(train_series, 'index'):
+        return predict_prophet(train_series, periods, freq=freq)
+    try:
+        cols = list(train_X.columns)
+        is_weekly = freq.startswith('W')
+        model = Prophet(
+            weekly_seasonality=(not is_weekly),
+            yearly_seasonality=(len(values) >= (104 if is_weekly else 365)),
+            daily_seasonality=False,
+        )
+        for c in cols:
+            model.add_regressor(c)
+
+        train_df = pd.DataFrame({'ds': train_series.index, 'y': values})
+        for c in cols:
+            train_df[c] = np.asarray(train_X[c].values, dtype=float)
+        model.fit(train_df)
+
+        future = pd.DataFrame({'ds': test_X.index})
+        for c in cols:
+            future[c] = np.asarray(test_X[c].values, dtype=float)
+        return model.predict(future)['yhat'].to_numpy()[:periods]
+    except Exception:
+        return predict_prophet(train_series, periods, freq=freq)
+
+
 def predict_prophet_with_events(train_series, train_events, test_events, freq='D'):
     """Layer 2(H1) — 이벤트를 사후 곱셈 보정이 아니라 Prophet 회귀변수로
     기저모델 안에 직접 투입한다.
@@ -289,33 +327,7 @@ def predict_prophet_with_events(train_series, train_events, test_events, freq='D
 
     미설치·데이터 부족·학습 실패 시 predict_prophet(이벤트 미반영)으로 폴백한다.
     """
-    periods = len(test_events)
-    values = np.asarray(train_series.values if hasattr(train_series, 'values') else train_series,
-                        dtype=float)
-    if not PROPHET_AVAILABLE or len(values) < 10 or not hasattr(train_series, 'index'):
-        return predict_prophet(train_series, periods, freq=freq)
-    try:
-        cols = list(train_events.columns)
-        is_weekly = freq.startswith('W')
-        model = Prophet(
-            weekly_seasonality=(not is_weekly),
-            yearly_seasonality=(len(values) >= (104 if is_weekly else 365)),
-            daily_seasonality=False,
-        )
-        for c in cols:
-            model.add_regressor(c)
-
-        train_df = pd.DataFrame({'ds': train_series.index, 'y': values})
-        for c in cols:
-            train_df[c] = np.asarray(train_events[c].values, dtype=float)
-        model.fit(train_df)
-
-        future = pd.DataFrame({'ds': test_events.index})
-        for c in cols:
-            future[c] = np.asarray(test_events[c].values, dtype=float)
-        return model.predict(future)['yhat'].to_numpy()[:periods]
-    except Exception:
-        return predict_prophet(train_series, periods, freq=freq)
+    return predict_prophet_with_regressors(train_series, train_events, test_events, freq=freq)
 
 
 def predict_tft(dated_series, periods, freq='D'):
@@ -628,7 +640,9 @@ def granger_pvalue(lagging, leading, lag):
 def fit_item_chain_gain(lagging_train, leading_lagged_train):
     """후행 품목의 '자체 기저치 대비 잔차'를 선행 품목의 시차 신호로 회귀해 γ를 추정.
 
-    'ŷ_final = ŷ_base × (1+Σβₖeₖ) + γ·x_item(t−L*)' 융합식의 가산항(γ·x_item)에 대응한다.
+    중간보고서 융합식 'ŷ_final = ŷ_base × (1+Σβₖeₖ) + γ·x_item(t−L*)'의 가산항에 대응한다.
+    **현재는 논문 ablation 대조군으로만 쓴다** — 본선은 predict_prophet_with_regressors로
+    선행 신호를 기저모델 안에 넣는 방식이다(탭4 참고).
     """
     baseline = lagging_train.rolling(14, center=True, min_periods=7).median()
     baseline = baseline.bfill().ffill()
@@ -641,6 +655,12 @@ def fit_item_chain_gain(lagging_train, leading_lagged_train):
 
 
 def predict_item_chain(base_forecast, reg, leading_lagged_test):
+    """대조군(ablation): 기저 예측에 잔차 회귀값을 사후 가산한다.
+
+    기저모델(Prophet)이 추세·계절성으로 이미 설명한 변동을 잔차 회귀가 다시 더하기 때문에
+    대체로 기저보다 나빠진다. 실측(4개 카테고리 쌍 × 4개 원점 = 16회, 일별 H=14일):
+    기저 15.4% / 사후 가산 21.8%(+6.5%p 악화) / 연쇄 회귀 15.4%(±0.0%p).
+    """
     X = leading_lagged_test.values.reshape(-1, 1)
     residual_hat = reg.predict(X)
     return np.clip(np.asarray(base_forecast) + residual_hat, 0, None)
@@ -1255,13 +1275,14 @@ if uploaded_file is not None:
                         m3.metric("Granger p-value", f"{p_value:.4f}" if p_value is not None else "계산 불가")
 
                         if p_value is not None and p_value < 0.05:
-                            st.success(
-                                f"H2′ 지지: '{lead_cat}' → '{lag_cat}' 시차 {best_lag}일 인과관계가 "
-                                f"통계적으로 유의합니다 (p<0.05)."
+                            st.info(
+                                f"인과성 유의: '{lead_cat}' → '{lag_cat}' 시차 {best_lag}일 Granger 인과관계가 "
+                                f"통계적으로 유의합니다 (p<0.05). 다만 **인과성이 유의하다고 예측이 좋아지는 "
+                                f"것은 아니므로**, H2′의 지지 여부는 아래 백테스트로 판정합니다."
                             )
                         else:
                             st.warning(
-                                f"H2′ 미지지: '{lead_cat}' → '{lag_cat}' 인과관계가 통계적으로 유의하지 않습니다."
+                                f"'{lead_cat}' → '{lag_cat}' Granger 인과관계가 통계적으로 유의하지 않습니다."
                             )
 
                         lag_df = pd.DataFrame({
@@ -1289,17 +1310,91 @@ if uploaded_file is not None:
                             base_fc2 = predict_prophet(train_lagging, horizon2, freq='D')
                             base_fc2 = np.clip(base_fc2, 0, None)
 
+                            # Layer 3 본선: 선행 카테고리의 시차 신호를 Prophet 회귀변수로 직접 투입
+                            lead_col = f"lead_{lead_cat}"
+                            chain_fc = np.clip(predict_prophet_with_regressors(
+                                train_lagging,
+                                train_leading_lagged.to_frame(lead_col),
+                                test_leading_lagged.to_frame(lead_col),
+                                freq='D',
+                            ), 0, None)
+
+                            # 대조군(ablation): 기존 사후 가산형 잔차 보정
                             reg = fit_item_chain_gain(train_lagging, train_leading_lagged)
-                            chain_fc = predict_item_chain(base_fc2, reg, test_leading_lagged)
+                            chain_add_fc = predict_item_chain(base_fc2, reg, test_leading_lagged)
 
                             actual2 = test_lagging.values
                             wape_base2 = compute_wape(actual2, base_fc2)
                             wape_chain = compute_wape(actual2, chain_fc)
+                            wape_add = compute_wape(actual2, chain_add_fc)
 
-                            m4, m5 = st.columns(2)
+                            # 이벤트 컬럼까지 있으면 융합식 전체(이벤트+연쇄)도 함께 비교한다.
+                            # H2′의 관건은 "연쇄 신호가 이벤트를 이미 반영한 모델에 무엇을 더하는가"이므로,
+                            # 기저 대비가 아니라 이벤트 반영 모델 대비로 봐야 과대평가를 피할 수 있다.
+                            event_src = {'is_weekend', 'is_holiday', 'is_vacation',
+                                         'precip_type', 'season_period'}
+                            has_events = event_src <= set(cdf.columns)
+                            combo_fc = event_only_fc = None
+                            if has_events:
+                                day_meta = cdf.groupby('date').agg(
+                                    is_weekend=('is_weekend', 'first'),
+                                    is_holiday=('is_holiday', 'first'),
+                                    is_vacation=('is_vacation', 'first'),
+                                    season_period=('season_period', 'first'),
+                                    precip_type=('precip_type', 'first'),
+                                ).sort_index().asfreq('D').ffill()
+                                ev_all = build_event_dummies(day_meta)
+                                tr_ev = ev_all.reindex(train_lagging.index).fillna(0.0)
+                                te_ev = ev_all.reindex(test_lagging.index).fillna(0.0)
+                                event_only_fc = np.clip(predict_prophet_with_regressors(
+                                    train_lagging, tr_ev, te_ev, freq='D'), 0, None)
+                                combo_fc = np.clip(predict_prophet_with_regressors(
+                                    train_lagging,
+                                    tr_ev.assign(**{lead_col: train_leading_lagged.values}),
+                                    te_ev.assign(**{lead_col: test_leading_lagged.values}),
+                                    freq='D'), 0, None)
+                                wape_event_only = compute_wape(actual2, event_only_fc)
+                                wape_combo = compute_wape(actual2, combo_fc)
+
+                            m4, m5, m6 = st.columns(3)
                             m4.metric(f"'{lag_cat}' 기저 예측 WAPE", f"{wape_base2:.1f}%")
-                            m5.metric("품목간 연쇄 반영 WAPE", f"{wape_chain:.1f}%",
+                            m5.metric("연쇄 회귀(H2′) WAPE", f"{wape_chain:.1f}%",
                                       delta=f"{wape_chain - wape_base2:+.1f}%p", delta_color="inverse")
+                            m6.metric("사후 가산(대조군) WAPE", f"{wape_add:.1f}%",
+                                      delta=f"{wape_add - wape_base2:+.1f}%p", delta_color="inverse")
+                            st.caption(
+                                "**연쇄 회귀(H2′)**가 본선입니다 — 선행 카테고리의 시차 신호를 Prophet "
+                                "`add_regressor()`로 기저모델 안에 넣어 추세·계절성과 함께 추정합니다. "
+                                "**사후 가산(대조군)**은 기저 예측에 잔차 회귀값을 더하는 기존 방식으로, "
+                                "기저모델이 이미 설명한 변동을 다시 더하기 때문에 대체로 기저보다 나빠지는 "
+                                "것이 정상입니다(논문 ablation 대조군)."
+                            )
+
+                            if has_events:
+                                m7, m8 = st.columns(2)
+                                m7.metric("이벤트만 반영 WAPE", f"{wape_event_only:.1f}%",
+                                          delta=f"{wape_event_only - wape_base2:+.1f}%p",
+                                          delta_color="inverse")
+                                m8.metric("이벤트+연쇄(융합식 전체) WAPE", f"{wape_combo:.1f}%",
+                                          delta=f"{wape_combo - wape_event_only:+.1f}%p",
+                                          delta_color="inverse")
+                                st.caption(
+                                    "오른쪽 지표의 증감은 **이벤트만 반영한 모델 대비**입니다. 연쇄 신호가 "
+                                    "이벤트와 무관한 정보를 실제로 더하는지 보려면 이 비교가 기준이 됩니다."
+                                )
+
+                            if wape_chain < wape_base2:
+                                st.success(
+                                    f"H2′ 지지: '{lead_cat}'의 시차 {best_lag}일 신호를 회귀변수로 넣었을 때 "
+                                    f"'{lag_cat}' 예측 WAPE가 {wape_base2 - wape_chain:.1f}%p 개선됐습니다."
+                                )
+                            else:
+                                st.warning(
+                                    f"H2′ 미지지: '{lead_cat}'의 시차 {best_lag}일 신호는 '{lag_cat}' 예측을 "
+                                    f"{wape_chain - wape_base2:.1f}%p 개선하지 못했습니다. Granger 인과성이 "
+                                    f"유의해도 두 카테고리가 요일·계절 같은 공통 요인을 공유하면 기저모델이 "
+                                    f"이미 그 변동을 설명하고 있어, 선행 신호가 추가 정보를 주지 못할 수 있습니다."
+                                )
 
                             fig4b = go.Figure()
                             fig4b.add_trace(go.Scatter(x=test_lagging.index, y=actual2, name='실제',
@@ -1307,8 +1402,15 @@ if uploaded_file is not None:
                             fig4b.add_trace(go.Scatter(x=test_lagging.index, y=base_fc2, name='기저 예측(Layer 1)',
                                                         line=dict(color='blue', dash='dot')))
                             fig4b.add_trace(go.Scatter(x=test_lagging.index, y=chain_fc,
-                                                        name=f"품목간 연쇄 반영({lead_cat}→{lag_cat})",
+                                                        name=f"연쇄 회귀 H2′({lead_cat}→{lag_cat})",
                                                         line=dict(color='green', width=2)))
+                            fig4b.add_trace(go.Scatter(x=test_lagging.index, y=chain_add_fc,
+                                                        name='사후 가산(대조군)',
+                                                        line=dict(color='orange', dash='dash')))
+                            if combo_fc is not None:
+                                fig4b.add_trace(go.Scatter(x=test_lagging.index, y=combo_fc,
+                                                            name='이벤트+연쇄(융합식 전체)',
+                                                            line=dict(color='purple', width=2, dash='dashdot')))
                             fig4b.update_layout(
                                 height=450, hovermode='x unified',
                                 title=f"'{lag_cat}' 예측 백테스트 — 선행: '{lead_cat}' (시차 {best_lag}일)"
