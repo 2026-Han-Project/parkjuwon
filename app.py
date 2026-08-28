@@ -983,6 +983,12 @@ if uploaded_file is not None:
                     p_xgb = predict_xgboost(series_data, 5) if ML_AVAILABLE else [0] * 5
                     p_lstm = predict_lstm(series_data, 5) if TF_AVAILABLE else [0] * 5
 
+                    # 앙상블은 사용 가능한 모델의 단순평균(동등 가중)이다. 2026-08-29에 가중 방식을
+                    # 실측 비교했으나(주간 H=5 walk-forward, 거내내역 12품목×2원점 / 빵집 16품목×2원점)
+                    # linear 제외·중앙값·검증 역가중·상위k 평균 어느 것도 표준오차(±11.5 / ±1.9)를
+                    # 넘는 개선을 주지 못해 동등 가중을 유지한다. 폴백으로 같은 선형 예측이 중복
+                    # 포함되는 경우도 28품목 중 1건뿐이라 중복 계상 우려도 실측상 미미했다.
+                    # 바꾸려면 먼저 재측정할 것 — 직관만으로 손대면 오히려 나빠질 수 있다.
                     valid_preds = [p_linear, p_holt, p_arima]
                     if PROPHET_AVAILABLE: valid_preds.append(p_prophet)
                     if TFT_AVAILABLE: valid_preds.append(p_tft)
