@@ -1128,6 +1128,13 @@ if uploaded_file is not None:
                         "이벤트 게이팅 임계치 τ (이 값을 넘는 이벤트 강도만 예측에 반영)",
                         0.0, 0.3, 0.10, 0.01, key='event_tau'
                     )
+                    use_tft3 = st.checkbox(
+                        "기저모델(Layer 1)을 TFT로도 함께 비교 — 논문용 Prophet 대비 성능 비교",
+                        value=False, key='event_use_tft', disabled=not TFT_AVAILABLE,
+                        help=("동일 조건(같은 학습 구간·검증 기간)에서 Prophet 기저 예측과 TFT 기저 예측을 "
+                              "나란히 비교합니다. CPU 학습이라 수십 초 걸립니다."
+                              if TFT_AVAILABLE else "pytorch_forecasting이 설치되어 있지 않습니다."),
+                    )
 
                     item_daily = edf[edf['item'] == ev_item].groupby('date').agg(
                         sales_qty=('sales_qty', 'sum'),
@@ -1174,6 +1181,25 @@ if uploaded_file is not None:
                                   delta=f"{wape_gated - wape_base:+.1f}%p", delta_color="inverse")
                         m4.metric("게이팅 발동 일수", f"{int(gate_on.sum())} / {horizon}일")
 
+                        tft_base_fc = None
+                        if use_tft3 and TFT_AVAILABLE:
+                            with st.spinner("TFT 기저모델 학습 중… (CPU, 수십 초)"):
+                                tft_base_fc = np.clip(
+                                    predict_tft(train['sales_qty'], horizon, freq='D'), 0, None)
+                            wape_tft = compute_wape(actual, tft_base_fc)
+                            t1, t2 = st.columns(2)
+                            t1.metric("기저 예측(Prophet) WAPE", f"{wape_base:.1f}%")
+                            t2.metric("기저 예측(TFT) WAPE", f"{wape_tft:.1f}%",
+                                      delta=f"{wape_tft - wape_base:+.1f}%p", delta_color="inverse")
+                            st.caption(
+                                "동일한 학습 구간·검증 기간에서 **Layer 1 기저모델끼리만** 비교한 값입니다. "
+                                "현재 TFT 구현은 단일 시계열(univariate)이라 이벤트를 반영하지 않으므로, "
+                                "위쪽 '이벤트 회귀(H1)'와 직접 비교하면 안 됩니다. 실측(4품목 평균): "
+                                "일별 H=14는 Prophet 23.6% / TFT 34.2%로 Prophet이 4품목 전부 우세, "
+                                "주간 H=5는 15.4% / 15.5%로 사실상 동률입니다. 해상도에 따라 격차가 크게 "
+                                "달라지므로 논문에는 예측 해상도와 기간을 반드시 명시하십시오."
+                            )
+
                         if wape_event < wape_base:
                             st.success(
                                 f"H1 지지: '{ev_item}'은 이벤트를 기저모델 회귀변수로 반영했을 때 "
@@ -1197,6 +1223,9 @@ if uploaded_file is not None:
                                                    line=dict(color='black', width=3)))
                         fig3.add_trace(go.Scatter(x=test.index, y=base_fc, name='기저 예측(Layer 1)',
                                                    line=dict(color='blue', dash='dot')))
+                        if tft_base_fc is not None:
+                            fig3.add_trace(go.Scatter(x=test.index, y=tft_base_fc, name='기저 예측(TFT)',
+                                                       line=dict(color='crimson', dash='dot')))
                         fig3.add_trace(go.Scatter(x=test.index, y=event_fc, name='이벤트 회귀 예측(H1)',
                                                    line=dict(color='red', width=3)))
                         fig3.add_trace(go.Scatter(x=test.index, y=gated_fc, name='곱셈형 게이팅(대조군)',
@@ -1254,6 +1283,13 @@ if uploaded_file is not None:
 
                     max_lag = st.slider("탐색할 최대 시차(일)", 3, 21, 14, key='chain_max_lag')
                     horizon2 = st.slider("백테스트 검증 기간(일)", 7, 28, 14, key='chain_horizon')
+                    use_tft4 = st.checkbox(
+                        "기저모델(Layer 1)을 TFT로도 함께 비교 — 논문용 Prophet 대비 성능 비교",
+                        value=False, key='chain_use_tft', disabled=not TFT_AVAILABLE,
+                        help=("후행 카테고리 시계열에 대해 Prophet 기저 예측과 TFT 기저 예측을 동일 조건에서 "
+                              "비교합니다. CPU 학습이라 수십 초 걸립니다."
+                              if TFT_AVAILABLE else "pytorch_forecasting이 설치되어 있지 않습니다."),
+                    )
 
                     cat_daily = cdf.groupby(['date', 'category'])['sales_qty'].sum().unstack('category').sort_index()
                     cat_daily = cat_daily.asfreq('D').fillna(0.0)
@@ -1370,6 +1406,23 @@ if uploaded_file is not None:
                                 "것이 정상입니다(논문 ablation 대조군)."
                             )
 
+                            tft_base_fc2 = None
+                            if use_tft4 and TFT_AVAILABLE:
+                                with st.spinner("TFT 기저모델 학습 중… (CPU, 수십 초)"):
+                                    tft_base_fc2 = np.clip(
+                                        predict_tft(train_lagging, horizon2, freq='D'), 0, None)
+                                wape_tft2 = compute_wape(actual2, tft_base_fc2)
+                                t1, t2 = st.columns(2)
+                                t1.metric("기저 예측(Prophet) WAPE", f"{wape_base2:.1f}%")
+                                t2.metric("기저 예측(TFT) WAPE", f"{wape_tft2:.1f}%",
+                                          delta=f"{wape_tft2 - wape_base2:+.1f}%p", delta_color="inverse")
+                                st.caption(
+                                    f"'{lag_cat}' 시계열에 대해 **Layer 1 기저모델끼리만** 동일 조건으로 "
+                                    "비교한 값입니다. TFT는 단일 시계열 구현이라 선행 카테고리 신호도, "
+                                    "이벤트도 반영하지 않으므로 위쪽 연쇄·이벤트 지표와 직접 비교하면 안 됩니다. "
+                                    "실측(3개 카테고리 평균, 일별 H=14): Prophet 16.8% / TFT 26.4%."
+                                )
+
                             if has_events:
                                 m7, m8 = st.columns(2)
                                 m7.metric("이벤트만 반영 WAPE", f"{wape_event_only:.1f}%",
@@ -1401,6 +1454,10 @@ if uploaded_file is not None:
                                                         line=dict(color='black', width=3)))
                             fig4b.add_trace(go.Scatter(x=test_lagging.index, y=base_fc2, name='기저 예측(Layer 1)',
                                                         line=dict(color='blue', dash='dot')))
+                            if tft_base_fc2 is not None:
+                                fig4b.add_trace(go.Scatter(x=test_lagging.index, y=tft_base_fc2,
+                                                            name='기저 예측(TFT)',
+                                                            line=dict(color='crimson', dash='dot')))
                             fig4b.add_trace(go.Scatter(x=test_lagging.index, y=chain_fc,
                                                         name=f"연쇄 회귀 H2′({lead_cat}→{lag_cat})",
                                                         line=dict(color='green', width=2)))
