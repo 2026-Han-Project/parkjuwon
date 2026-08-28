@@ -10,3 +10,6 @@ prophet
 pytorch_forecasting
 langgraph
 shap
+# 선택 기능 — 탭1 LLM 브리핑. 미설치여도 앱은 정상 동작하며,
+# API 키가 없으면 호출 경로 자체가 비활성이라 비용이 발생하지 않는다.
+anthropic
