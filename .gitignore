@@ -47,6 +47,11 @@ lightning_logs/
 # 단, data/의 합성(synthetic) 통합 데이터셋은 실거래 정보가 아니므로 예외로 추적
 !/data/integrated_dataset.csv
 
+# 한이음 보고서 원문 (중간보고서·개발보고서·아키텍처 자료).
+# 저장소가 public이라 평가 전 원문이 공개되지 않도록 git에서 제외한다.
+# 파일 자체는 로컬 docs/ 와 ../_backup_20260829/docs 에 보관됨.
+docs/
+
 # 프로그램이 생성한 엑셀 예측 결과물
 *.xlsx
 
