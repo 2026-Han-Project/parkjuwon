@@ -69,12 +69,6 @@ streamlit run app.py
 ├── docker-compose.yml      # Grafana 모니터링 컨테이너 구성
 ├── README.md               # 현재 문서
 │
-├── docs/                   # 기획·보고서 문서
-│   ├── Biz-Forecaster_중간보고서_v2.md      # 중간보고서 (최신, 빵집 도메인 반영)
-│   ├── Biz-Forecaster_Interim_Report.docx
-│   ├── Biz-Forecaster_Architecture.pptx
-│   └── [BIZ] 2026 한이음 드림업 개발보고서.docx
-│
 ├── data/                   # 이벤트 통합 데이터셋 (H1·H2′·이상탐지·SHAP·What-if 탭 검증용)
 │   ├── integrated_dataset.csv   # 합성 POS+이벤트 데이터 (2024~2025, 실거래 정보 아님)
 │   │                           #  출처: 2026-Han-Project/dataset (A파트 파이프라인 산출물)
@@ -120,7 +114,7 @@ streamlit run app.py
 - [x] **What-if 채팅** : 이벤트 조건을 체크·채팅으로 입력하면 H1 모델로 실계산한 예상 판매량·권장 생산량 응답 (💬 탭, 키워드 매칭 기반이며 LLM 미연동)
 - [ ] N노드(체인점·가맹점) 확장 — 본 PoC 로드맵 범위 밖, 향후 계획
 
-> 📄 상세 기획·검증 내용은 [`docs/`](./docs) 폴더의 중간보고서를 참고하세요.
+> 📄 상세 기획·검증 내용은 한이음 중간보고서에 정리되어 있습니다. 보고서 원문(`docs/`)은 평가 전 공개를 피하기 위해 저장소에서 제외했으며, 필요하시면 팀에 요청해 주세요.
 
 ---
 
