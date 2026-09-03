@@ -6,6 +6,8 @@ from datetime import timedelta
 from typing import TypedDict, List
 import io
 import os
+import contextlib
+from collections import Counter
 import json
 import sqlite3
 from pathlib import Path
@@ -89,6 +91,55 @@ try:
     SHAP_AVAILABLE = True
 except ImportError:
     SHAP_AVAILABLE = False
+
+# -----------------------------------------------------------------------------
+# 0. 폴백 기록 — 예측 함수가 조용히 더 단순한 모델로 물러난 사실을 남긴다
+# -----------------------------------------------------------------------------
+# 아래 예측 함수들은 실패하면 예외를 올리지 않고 더 단순한 모델로 갈아탄다. 앱이 죽지
+# 않게 하는 안전장치라 없애면 안 된다. 문제는 그게 **조용해서**, 백테스트가 내놓은 WAPE가
+# 의도한 모델을 측정한 값인지 폴백 모델을 측정한 값인지 화면만 봐서는 알 수 없다는 점이다.
+#
+#   predict_prophet_with_regressors -> predict_prophet  이면 외생변수가 빠진다.
+#       H1 탭의 '기저 vs 이벤트 회귀' 비교가 같은 값끼리의 비교가 되어 개선폭이 0%p로 나온다.
+#   predict_tft -> predict_prophet  이면 'TFT vs Prophet' 비교가 Prophet vs Prophet이 된다.
+#
+# 둘 다 숫자는 멀쩡해 보이는데 의미가 없다. 그래서 폴백을 막는 대신 기록하고, 백테스트
+# 결과 옆에 띄운다. 보고서에 숫자를 옮기기 전에 이 알림이 떴는지부터 확인할 것.
+
+FALLBACK_LOG = []
+
+
+def record_fallback(func, fell_back_to, reason):
+    """폴백 1건을 기록한다. Streamlit은 상호작용마다 스크립트를 처음부터 다시 실행하므로
+    이 리스트도 매 실행마다 새로 비워진다 (= 항상 '이번 실행분'만 남는다)."""
+    FALLBACK_LOG.append({'func': func, 'to': fell_back_to, 'reason': reason})
+
+
+def fallback_mark():
+    """현재 로그 길이를 표식으로 돌려준다. 계산 직전에 찍어두고 render_fallback_notice()에
+    넘기면 그 구간에서 발생한 폴백만 골라 볼 수 있다."""
+    return len(FALLBACK_LOG)
+
+
+def render_fallback_notice(mark=0, context=""):
+    """mark 이후 쌓인 폴백을 집계해 화면에 띄운다. 폴백이 없으면 아무것도 그리지 않는다."""
+    counts = Counter(
+        (r['func'], r['to'], r['reason']) for r in FALLBACK_LOG[mark:]
+    )
+    if not counts:
+        return
+    lines = [f"- `{f}` → `{t}` **{n}회** — {reason}"
+             for (f, t, reason), n in counts.most_common()]
+    nl = chr(10)
+    st.error(
+        f"**이번 계산에서 폴백이 발생했습니다{(' — ' + context) if context else ''}.**"
+        + nl + nl
+        + "아래 지표는 의도한 모델이 아니라 **폴백 모델을 측정한 값**일 수 있습니다. "
+          "원인을 해결하기 전에는 이 숫자를 보고서에 옮기지 마십시오."
+        + nl + nl
+        + nl.join(lines)
+    )
+
 
 # -----------------------------------------------------------------------------
 # 1. 페이지 설정
@@ -191,7 +242,9 @@ def predict_linear_trend_force(series, weeks=5):
         future_x = np.arange(n, n + weeks)
         forecast = slope * future_x + intercept
         return forecast
-    except:
+    except Exception as e:
+        record_fallback('predict_linear_trend_force', '평균값 반복',
+                        f"기울기 추정 실패: {type(e).__name__} — {e}")
         return [series.mean()] * weeks
 
 
@@ -205,8 +258,12 @@ def predict_holt_trend(series, weeks=5):
             # np.asarray로 통일한다 (.values는 ndarray에 없어 AttributeError 발생 가능).
             return np.asarray(model.forecast(weeks))
         else:
+            record_fallback('predict_holt_trend', 'predict_linear_trend_force',
+                            f"데이터 부족(4주 미만, 실제 {len(series)})")
             return predict_linear_trend_force(series, weeks)
-    except Exception:
+    except Exception as e:
+        record_fallback('predict_holt_trend', 'predict_linear_trend_force',
+                        f"Holt 적합 실패: {type(e).__name__} — {e}")
         return predict_linear_trend_force(series, weeks)
 
 
@@ -214,7 +271,9 @@ def predict_arima_trend(series, weeks=5):
     try:
         model = ARIMA(series, order=(1, 1, 1)).fit()
         return np.asarray(model.forecast(steps=weeks))
-    except Exception:
+    except Exception as e:
+        record_fallback('predict_arima_trend', 'predict_linear_trend_force',
+                        f"ARIMA(1,1,1) 적합 실패: {type(e).__name__} — {e}")
         return predict_linear_trend_force(series, weeks)
 
 
@@ -264,6 +323,10 @@ def predict_prophet(dated_series, periods, freq='D'):
     predict_linear_trend_force로 폴백한다."""
     values = np.asarray(dated_series.values if hasattr(dated_series, 'values') else dated_series, dtype=float)
     if not PROPHET_AVAILABLE or len(values) < 10 or not hasattr(dated_series, 'index'):
+        record_fallback('predict_prophet', 'predict_linear_trend_force',
+                        "prophet 미설치" if not PROPHET_AVAILABLE else
+                        (f"관측치 부족({len(values)} < 10)" if len(values) < 10 else
+                         "DatetimeIndex 없는 입력"))
         return predict_linear_trend_force(values, periods)
     try:
         train_df = pd.DataFrame({'ds': dated_series.index, 'y': values})
@@ -278,7 +341,9 @@ def predict_prophet(dated_series, periods, freq='D'):
         future = model.make_future_dataframe(periods=periods, freq=freq, include_history=False)
         forecast = model.predict(future)
         return forecast['yhat'].to_numpy()[:periods]
-    except Exception:
+    except Exception as e:
+        record_fallback('predict_prophet', 'predict_linear_trend_force',
+                        f"Prophet 학습/예측 실패: {type(e).__name__} — {e}")
         return predict_linear_trend_force(values, periods)
 
 
@@ -296,6 +361,10 @@ def predict_prophet_with_regressors(train_series, train_X, test_X, freq='D'):
     values = np.asarray(train_series.values if hasattr(train_series, 'values') else train_series,
                         dtype=float)
     if not PROPHET_AVAILABLE or len(values) < 10 or not hasattr(train_series, 'index'):
+        record_fallback('predict_prophet_with_regressors', 'predict_prophet(외생변수 미반영)',
+                        "prophet 미설치" if not PROPHET_AVAILABLE else
+                        (f"관측치 부족({len(values)} < 10)" if len(values) < 10 else
+                         "DatetimeIndex 없는 입력"))
         return predict_prophet(train_series, periods, freq=freq)
     try:
         cols = list(train_X.columns)
@@ -317,7 +386,9 @@ def predict_prophet_with_regressors(train_series, train_X, test_X, freq='D'):
         for c in cols:
             future[c] = np.asarray(test_X[c].values, dtype=float)
         return model.predict(future)['yhat'].to_numpy()[:periods]
-    except Exception:
+    except Exception as e:
+        record_fallback('predict_prophet_with_regressors', 'predict_prophet(외생변수 미반영)',
+                        f"add_regressor 적합/예측 실패: {type(e).__name__} — {e}")
         return predict_prophet(train_series, periods, freq=freq)
 
 
@@ -349,6 +420,9 @@ def predict_tft(dated_series, periods, freq='D'):
     n = len(values)
     encoder_len = min(30, max(10, n - periods - 5))
     if not TFT_AVAILABLE or n < encoder_len + periods + 5:
+        record_fallback('predict_tft', 'predict_prophet',
+                        "pytorch_forecasting 미설치" if not TFT_AVAILABLE else
+                        f"관측치 부족(n={n} < encoder {encoder_len} + horizon {periods} + 5)")
         return predict_prophet(dated_series, periods, freq=freq)
     try:
         torch.manual_seed(42)
@@ -421,9 +495,13 @@ def predict_tft(dated_series, periods, freq='D'):
         raw_predictions = tft.predict(predict_dl, mode='prediction')
         forecast = np.asarray(raw_predictions[0]).flatten()[:periods]
         if len(forecast) < periods:
+            record_fallback('predict_tft', 'predict_prophet',
+                            f"예측 길이 부족({len(forecast)} < {periods})")
             return predict_prophet(dated_series, periods, freq=freq)
         return forecast
-    except Exception:
+    except Exception as e:
+        record_fallback('predict_tft', 'predict_prophet',
+                        f"TFT 학습/예측 실패: {type(e).__name__} — {e}")
         return predict_prophet(dated_series, periods, freq=freq)
 
 
@@ -669,13 +747,26 @@ def find_optimal_lag(leading, lagging, min_lag=1, max_lag=14):
 
 
 def granger_pvalue(lagging, leading, lag):
-    """leading이 lagging을 Granger 인과하는지 검정, p-value 반환 (실패 시 None)."""
+    """leading이 lagging을 Granger 인과하는지 검정, p-value 반환 (실패 시 None).
+
+    verbose 인자를 넘기지 않는 이유
+        statsmodels 0.14에서 verbose가 deprecated(FutureWarning)됐고 0.15에서 아예
+        제거됐다. requirements가 버전을 고정하기 전에는 새로 설치한 환경에 0.15가
+        깔려 `verbose=False`가 TypeError를 냈고, 그걸 아래 except가 삼켜서 p-value가
+        조용히 None이 됐다 — H2′ 인과성 검정이 통째로 무효가 되는데 화면에는 그냥
+        "유의하지 않음"처럼 보인다. 기본값(None)은 두 버전 모두 결과를 반환하므로
+        인자를 빼는 것이 양쪽 호환된다.
+        다만 0.14.x는 이때 검정표를 stdout에 찍으므로 redirect_stdout으로 삼킨다.
+    """
+    data = pd.concat([lagging, leading], axis=1).dropna()
+    data.columns = ['y', 'x']
     try:
-        data = pd.concat([lagging, leading], axis=1).dropna()
-        data.columns = ['y', 'x']
-        result = grangercausalitytests(data, maxlag=[lag], verbose=False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = grangercausalitytests(data, maxlag=[lag])
         return result[lag][0]['ssr_ftest'][1]
-    except Exception:
+    except Exception as e:
+        record_fallback('granger_pvalue', 'None(검정 불가)',
+                        f"{type(e).__name__} — {e}")
         return None
 
 
@@ -1112,6 +1203,7 @@ if uploaded_file is not None:
                 item_weekly = item_weekly.reindex(full_idx, fill_value=0)
                 series_data = item_weekly.values
 
+                _fb_tab1 = fallback_mark()
                 with st.spinner("예측 모델 분석 중..."):
                     p_linear = predict_linear_trend_force(series_data, 5)
                     p_holt = predict_holt_trend(series_data, 5)
@@ -1148,6 +1240,8 @@ if uploaded_file is not None:
                     'Prophet': [round(max(0, x), 1) for x in p_prophet],
                     'TFT': [round(max(0, x), 1) for x in p_tft],
                 })
+
+                render_fallback_notice(_fb_tab1, "탭1 앙상블")
 
                 st.subheader("📋 예측 결과표")
                 st.dataframe(res_df.set_index('날짜'), use_container_width=True)
@@ -1393,6 +1487,7 @@ if uploaded_file is not None:
                         events = build_event_dummies(item_daily)
                         beta = fit_event_elasticity(train['sales_qty'], events.loc[train.index])
 
+                        _fb_tab3 = fallback_mark()
                         base_fc = predict_prophet(train['sales_qty'], horizon, freq='D')
                         base_fc = np.clip(base_fc, 0, None)
 
@@ -1456,6 +1551,8 @@ if uploaded_file is not None:
                             "곱해 이벤트를 이중 계상하기 때문에, 기저보다 나빠지는 것이 정상입니다. "
                             "본선은 이중계상이 구조적으로 없는 '이벤트 회귀' 쪽입니다."
                         )
+
+                        render_fallback_notice(_fb_tab3, "탭3 H1 백테스트")
 
                         fig3 = go.Figure()
                         fig3.add_trace(go.Scatter(x=test.index, y=actual, name='실제',
@@ -1541,6 +1638,7 @@ if uploaded_file is not None:
                         leading = cat_daily[lead_cat]
                         lagging = cat_daily[lag_cat]
 
+                        _fb_tab4 = fallback_mark()
                         best_lag, best_corr, corr_by_lag = find_optimal_lag(leading, lagging, 1, max_lag)
                         p_value = granger_pvalue(lagging, leading, best_lag)
 
@@ -1687,6 +1785,8 @@ if uploaded_file is not None:
                                     f"유의해도 두 카테고리가 요일·계절 같은 공통 요인을 공유하면 기저모델이 "
                                     f"이미 그 변동을 설명하고 있어, 선행 신호가 추가 정보를 주지 못할 수 있습니다."
                                 )
+
+                            render_fallback_notice(_fb_tab4, "탭4 H2′ 백테스트")
 
                             fig4b = go.Figure()
                             fig4b.add_trace(go.Scatter(x=test_lagging.index, y=actual2, name='실제',
