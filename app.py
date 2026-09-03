@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import TypedDict, List
 import io
 import os
+import sys
 import contextlib
 from collections import Counter
 import json
@@ -141,10 +142,57 @@ def render_fallback_notice(mark=0, context=""):
     )
 
 
+@st.cache_resource(show_spinner=False)
+def check_prophet_backend():
+    """Prophet 백엔드가 실제로 뜨는지 세션당 한 번 확인한다. 반환: (정상여부, 사유).
+
+    적합(fit) 없이 생성자만 부르므로 100ms 남짓이고, cache_resource 라 세션당 1회만 돈다.
+
+    왜 필요한가 — 한글 Windows + PYTHONUTF8=1 조합
+        cmdstanpy 는 Windows 에서 `where.exe tbb.dll` 로 TBB 위치를 확인하는데,
+        실패하면 where.exe 가 CP949 한글 메시지를 낸다(경로에 한글이 있으면 성공해도
+        마찬가지다). Python 이 UTF-8 모드면 그 출력을 UTF-8 로 읽다 UnicodeDecodeError
+        가 나는데, cmdstanpy 는 RuntimeError 만 잡으므로 그대로 올라간다. Prophet 은
+        모든 백엔드 로딩 실패를 조용히 삼킨 뒤 stan_backend 속성이 없다는 엉뚱한
+        AttributeError 를 내고, 결과적으로 **모든 Prophet 호출이 선형추세로 폴백**한다.
+        그러면 H1 의 기저와 이벤트 회귀가 같은 값이 되어 개선폭이 전 품목 0.0%p 로
+        나온다 — 가설이 틀린 게 아니라 Prophet 이 아예 안 돈 것이다.
+
+        AttributeError 를 40번 보여주는 대신 여기서 한 번 걸러 원인과 해법을 말해준다.
+        (이 저장소의 실행하기.bat 은 PYTHONUTF8 을 설정하지 않으므로 정상 경로에서는
+         이 검사가 항상 통과한다. 통합 과정에서 다른 런처를 쓸 때를 대비한 안전망이다.)
+    """
+    if not PROPHET_AVAILABLE:
+        return False, "prophet 패키지가 설치되어 있지 않습니다."
+    try:
+        Prophet(weekly_seasonality=False, yearly_seasonality=False, daily_seasonality=False)
+        return True, ""
+    except Exception as e:
+        hint = ""
+        if os.name == 'nt' and getattr(sys.flags, 'utf8_mode', 0) and not str(Path.cwd()).isascii():
+            hint = ("  ← 알려진 조합입니다: 한글 Windows + PYTHONUTF8=1 + 경로에 한글. "
+                    "실행 스크립트에서 PYTHONUTF8 / PYTHONIOENCODING 설정을 빼거나, "
+                    "프로젝트 폴더를 영문 경로로 옮기면 해결됩니다.")
+        return False, f"{type(e).__name__} — {e}{hint}"
+
+
 # -----------------------------------------------------------------------------
 # 1. 페이지 설정
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="AI 수요 예측 (빵집 스마트 필터)", layout="wide")
+
+# Prophet 백엔드가 죽어 있으면 Layer 1 전체가 선형추세로 조용히 폴백한다. 그 상태로
+# 백테스트를 돌리면 숫자는 나오지만 의미가 없으므로, 시작하자마자 크게 알리고
+# PROPHET_AVAILABLE 을 내려 이후 경로가 일관되게 동작하도록 한다.
+_prophet_ok, _prophet_reason = check_prophet_backend()
+if PROPHET_AVAILABLE and not _prophet_ok:
+    PROPHET_AVAILABLE = False
+    st.error(
+        "**Prophet 백엔드를 불러오지 못했습니다. 기저모델(Layer 1)이 선형추세로 대체됩니다.**"
+        + chr(10) + chr(10)
+        + "H1 · H2' 백테스트 결과가 무의미해지므로, 아래 원인을 해결한 뒤 다시 실행하세요."
+        + chr(10) + chr(10) + "> " + _prophet_reason
+    )
 
 
 @st.cache_data
